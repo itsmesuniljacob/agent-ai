@@ -1,5 +1,5 @@
 import random
-from agents import Agent, function_tool, Runner, trace
+from agents import Agent, function_tool, Runner, RunContextWrapper, trace, handoff
 from pydantic import BaseModel, Field
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -131,6 +131,9 @@ def execute_query(query: str):
     except Exception as e:
         return str(e)
 
+def data_query_agent_handoff(ctx: RunContextWrapper[None]):
+    print('Handing off to data query agent')
+
 # Query Generator Agent
 query_generator_agent = Agent(
     name="query_generator_agent_v1",
@@ -156,6 +159,8 @@ data_query_agent = Agent(
     name="data_query_agent_v1",
     handoffs=[query_refiner_agent, query_generator_agent, query_execution_agent],
 )
+
+
 root_agent = Agent(
     name="Root Agent",
     instructions=(
@@ -165,7 +170,9 @@ root_agent = Agent(
         "Always end your responses by asking an engaging question to keep the conversation going, such as 'What kind of watch are you looking for?' or 'Have you tried any of our watches yet?'"
     ),
     model="gpt-4o-mini",
-    handoffs=[data_query_agent]
+    handoffs=[
+        handoff(data_query_agent,on_handoff=data_query_agent_handoff)
+        ]
 )
 
 
