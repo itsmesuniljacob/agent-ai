@@ -1,9 +1,11 @@
 import random
-from agents import Agent, function_tool, Runner
+from agents import Agent, function_tool, Runner, trace
+from pydantic import BaseModel, Field
 from openai import OpenAI
 from dotenv import load_dotenv
-import asyncio
+import asyncio, json
 import pandas as pd
+import streamlit as st
 
 
 load_dotenv(override=True)
@@ -51,6 +53,18 @@ design_keywords = [
     "Legacy", "Aero", "Chronos", "Nebula", "Titan"
 ]
 
+# Query Refiner Agent
+query_refiner_agent = Agent(
+    name="query_refiner_agent_v1",
+    model="gpt-4o-mini",
+    instructions=(
+        "You are a helpful assistant that can refine queries to be more specific and accurate."
+        "If user asks for best seller or for random suggestions, search for perfumes with maximum rating."
+        "You receive a query and generate a refined query in plain english that another agent will use to generate a pandas expression."
+        "The query should be concise and to the point, and should not include any instructions or explanations."
+    )
+)
+
 # I want to generate watch data with the above data, also add price and description. The output should be a json object with the following keys: brand, movement_type, gender, availability, watch_style, material, season, launch_year, adjective, design_keyword, price, description.
 # create dataframe with 100 rows and store in products.csv
 import pandas as pd
@@ -89,5 +103,78 @@ def generate_watch_data(n):
 
 df = pd.DataFrame(generate_watch_data(100))
 # create a csv file with the dataframe
-print(df.head())
+# print(df.head())
 
+class QueryGeneratorOutput(BaseModel):
+    query: str = Field(description="A valid pandas expression that can be used to query the data.")
+
+# sales_agent = Agent(
+#     name="Sales  Agent",
+#     description="A agent that can answer questions related to business data",
+#     instructions=(
+#         "You are a helpful assistant that can answer questions related to business data."
+#         "You are given a question and you need to answer it based on the data."
+#         ),
+#     output_schema=QueryGeneratorOutput,
+# )
+
+
+# a function that takes a pandas expression and executes it and returns the result, if result is an error, return the error message
+def execute_query(query: str):
+    try:
+        result = eval(query, {'df': df})
+        if isinstance(result, pd.Series):
+            result = result.to_dict()
+        elif isinstance(result, pd.DataFrame):
+            result = result.to_dict(orient='records')
+        return json.dumps({"results": result} if result else {"error": "No products found matching your criteria"})
+    except Exception as e:
+        return str(e)
+
+# Query Generator Agent
+query_generator_agent = Agent(
+    name="query_generator_agent_v1",
+    model="gpt-4o-mini",
+    instructions=(
+        "You are a helpful assistant that can answer questions related to business data."
+        f"Seeing the refined query, {df.columns} and {df.head()}, you generate a pandas expression to query the data."
+    ),
+    output_type=QueryGeneratorOutput,
+)
+
+query_execution_agent = Agent(
+    name="query_execution_agent_v1",
+    model="gpt-4o-mini",
+    instructions=(
+        "You are a helpful assistant that executes a pandas expression using the `execute_query` tool and return the results."
+        "You should return the results in a human readable format. In a concise and convincing way."
+    ),
+    tools=[execute_query]
+)
+
+data_query_agent = Agent(
+    name="data_query_agent_v1",
+    handoffs=[query_refiner_agent, query_generator_agent, query_execution_agent],
+)
+root_agent = Agent(
+    name="Root Agent",
+    instructions=(
+      "You are a friendly and talkative assistant representing WatchCompany, a premium watch brand known for its exquisite collection of watches. "
+        "Introduce yourself as WatchCompany's brand representative and share our passion for creating unique, high-quality watches. "
+        "Engage users warmly, answer general questions, and encourage them to ask about our watches, collections, or anything related to the WatchCompany brand. "
+        "Always end your responses by asking an engaging question to keep the conversation going, such as 'What kind of watch are you looking for?' or 'Have you tried any of our watches yet?'"
+    ),
+    model="gpt-4o-mini",
+    handoffs=[data_query_agent]
+)
+
+
+async def run_agent():
+    with trace("WatchCompany Customer Care Agent"):
+        runner = Runner()
+        result = await runner.run(root_agent, "Which is expensive watch?")
+        print(result.final_output)
+
+if __name__ == "__main__":
+    print('Starting the agent...')
+    asyncio.run(run_agent())
