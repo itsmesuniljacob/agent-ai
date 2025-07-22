@@ -2,10 +2,12 @@ import random
 from agents import Agent, function_tool, Runner, RunContextWrapper, trace, handoff
 from pydantic import BaseModel, Field
 from openai import OpenAI
+from openai.types.responses import ResponseTextDeltaEvent, ResponseContentPartDoneEvent
 from dotenv import load_dotenv
 import asyncio, json
 import pandas as pd
 import streamlit as st
+import strip_markdown as smd
 
 
 load_dotenv(override=True)
@@ -175,13 +177,29 @@ root_agent = Agent(
         ]
 )
 
+async def main():
+    user_msg =  input("How can I help you today?\n\n")
+    agent = root_agent
+    inputs: list[str] = [{"content": user_msg, "role": "user"}]
+    while True:
+        with trace("WatchCompany Customer Care Agent"):
+            runner = Runner()
+            result = runner.run_streamed(root_agent, input=inputs)
+        async for chunk in result.stream_events():
+            if isinstance(chunk, ResponseTextDeltaEvent):
+                print(chunk.delta, end="", flush=True)
+            elif isinstance(chunk, ResponseContentPartDoneEvent):
+                print("\n")
+        answer = result.final_output
+        answer.replace("\n\n", "\n")
+        print(f"\n\n{answer}\n\n")
+ 
+        inputs = result.to_input_list()
+        print()
 
-async def run_agent():
-    with trace("WatchCompany Customer Care Agent"):
-        runner = Runner()
-        result = await runner.run(root_agent, "Which is expensive watch?")
-        print(result.final_output)
+        user_msg = input("Follow up question: \n")
+
+        inputs.append({"content": user_msg, "role": "user"})
 
 if __name__ == "__main__":
-    print('Starting the agent...')
-    asyncio.run(run_agent())
+    asyncio.run(main())
