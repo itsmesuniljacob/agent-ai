@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from openai import OpenAI
 from openai.types.responses import ResponseTextDeltaEvent, ResponseContentPartDoneEvent
 from dotenv import load_dotenv
-import asyncio, json
+import asyncio, json, time
 import pandas as pd
 import streamlit as st
 import strip_markdown as smd
@@ -110,19 +110,10 @@ df = pd.DataFrame(generate_watch_data(100))
 class QueryGeneratorOutput(BaseModel):
     query: str = Field(description="A valid pandas expression that can be used to query the data.")
 
-# sales_agent = Agent(
-#     name="Sales  Agent",
-#     description="A agent that can answer questions related to business data",
-#     instructions=(
-#         "You are a helpful assistant that can answer questions related to business data."
-#         "You are given a question and you need to answer it based on the data."
-#         ),
-#     output_schema=QueryGeneratorOutput,
-# )
-
 
 # a function that takes a pandas expression and executes it and returns the result, if result is an error, return the error message
 def execute_query(query: str):
+    print(f"Executing query: {query}")
     try:
         result = eval(query, {'df': df})
         if isinstance(result, pd.Series):
@@ -169,6 +160,7 @@ root_agent = Agent(
       "You are a friendly and talkative assistant representing WatchCompany, a premium watch brand known for its exquisite collection of watches. "
         "Introduce yourself as WatchCompany's brand representative and share our passion for creating unique, high-quality watches. "
         "Engage users warmly, answer general questions, and encourage them to ask about our watches, collections, or anything related to the WatchCompany brand. "
+        "If the user asks about watches and products of Watch company, delegate the query to `data_query_agent`. "
         "Always end your responses by asking an engaging question to keep the conversation going, such as 'What kind of watch are you looking for?' or 'Have you tried any of our watches yet?'"
     ),
     model="gpt-4o-mini",
@@ -178,7 +170,7 @@ root_agent = Agent(
 )
 
 async def main():
-    user_msg =  input("How can I help you today?\n\n")
+    user_msg =  input("User: ")
     agent = root_agent
     inputs: list[str] = [{"content": user_msg, "role": "user"}]
     while True:
@@ -191,15 +183,23 @@ async def main():
             elif isinstance(chunk, ResponseContentPartDoneEvent):
                 print("\n")
         answer = result.final_output
-        answer.replace("\n\n", "\n")
-        print(f"\n\n{answer}\n\n")
+        print("Assistant: "+f"{answer}\n")
  
         inputs = result.to_input_list()
         print()
 
-        user_msg = input("Follow up question: \n")
+        user_msg = input("User: ")
 
         inputs.append({"content": user_msg, "role": "user"})
+
+        # if there is no input from user for a minute   
+        if not user_msg:
+            time.sleep(60)
+            if not user_msg:
+                break
+
+        if user_msg.lower() in ["exit", "bye"]:
+            break
 
 if __name__ == "__main__":
     asyncio.run(main())
