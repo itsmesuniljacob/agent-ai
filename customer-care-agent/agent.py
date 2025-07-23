@@ -55,18 +55,6 @@ design_keywords = [
     "Legacy", "Aero", "Chronos", "Nebula", "Titan"
 ]
 
-# Query Refiner Agent
-query_refiner_agent = Agent(
-    name="query_refiner_agent_v1",
-    model="gpt-4o-mini",
-    instructions=(
-        "You are a helpful assistant that can refine queries to be more specific and accurate."
-        "If user asks for best seller or for random suggestions, search for perfumes with maximum rating."
-        "You receive a query and generate a refined query in plain english that another agent will use to generate a pandas expression."
-        "The query should be concise and to the point, and should not include any instructions or explanations."
-    )
-)
-
 # I want to generate watch data with the above data, also add price and description. The output should be a json object with the following keys: brand, movement_type, gender, availability, watch_style, material, season, launch_year, adjective, design_keyword, price, description.
 # create dataframe with 100 rows and store in products.csv
 import pandas as pd
@@ -103,9 +91,9 @@ def generate_watch_data(n):
         })
     return data
 
-df = pd.DataFrame(generate_watch_data(100))
+df = pd.DataFrame(generate_watch_data(10))
 # create a csv file with the dataframe
-# print(df.head())
+print(df.head())
 
 class QueryGeneratorOutput(BaseModel):
     query: str = Field(description="A valid pandas expression that can be used to query the data.")
@@ -120,23 +108,31 @@ def execute_query(query: str):
             result = result.to_dict()
         elif isinstance(result, pd.DataFrame):
             result = result.to_dict(orient='records')
-        return json.dumps({"results": result} if result else {"error": "No products found matching your criteria"})
+        if not result:
+            return "No products found matching your criteria."
+        # Format results as a readable list
+        if isinstance(result, dict):
+            # Single result (Series)
+            result = [result]
+        output = ["\nHere are the matching watches:\n"]
+        for i, item in enumerate(result[:5]):  # Show only first 5 results
+            output.append(
+                f"{i+1}. {item['brand']} {item['watch_style']} ({item['launch_year']})\n"
+                f"   Price: ${item['price']}\n"
+                f"   Movement: {item['movement_type']}, Gender: {item['gender']}\n"
+                f"   Material: {item['material']}, Season: {item['season']}\n"
+                f"   Availability: {item['availability']}\n"
+                f"   Description: {item['description']}\n"
+            )
+        if len(result) > 5:
+            output.append(f"...and {len(result)-5} more results.\n")
+        return "\n".join(output)
     except Exception as e:
         return str(e)
 
 def data_query_agent_handoff(ctx: RunContextWrapper[None]):
     print('Handing off to data query agent')
 
-# Query Generator Agent
-query_generator_agent = Agent(
-    name="query_generator_agent_v1",
-    model="gpt-4o-mini",
-    instructions=(
-        "You are a helpful assistant that can answer questions related to business data."
-        f"Seeing the refined query, {df.columns} and {df.head()}, you generate a pandas expression to query the data."
-    ),
-    output_type=QueryGeneratorOutput,
-)
 
 query_execution_agent = Agent(
     name="query_execution_agent_v1",
@@ -148,11 +144,36 @@ query_execution_agent = Agent(
     tools=[execute_query]
 )
 
-data_query_agent = Agent(
-    name="data_query_agent_v1",
-    handoffs=[query_refiner_agent, query_generator_agent, query_execution_agent],
+# Query Generator Agent
+query_generator_agent = Agent(
+    name="query_generator_agent_v1",
+    model="gpt-4o-mini",
+    instructions=(
+        "You are a helpful assistant that can answer questions related to business data."
+        f"Seeing the refined query, {df.columns} and {df.head()}, you generate a pandas expression to query the data."
+    ),
+    output_type=QueryGeneratorOutput,
+    handoffs=[query_execution_agent],
 )
 
+# Query Refiner Agent
+query_refiner_agent = Agent(
+    name="query_refiner_agent_v1",
+    model="gpt-4o-mini",
+    instructions=(
+        "You are a helpful assistant that can refine queries to be more specific and accurate."
+        "If user asks for best seller or for random suggestions, search for perfumes with maximum rating."
+        "You receive a query and generate a refined query in plain english that another agent will use to generate a pandas expression."
+        "The query should be concise and to the point, and should not include any instructions or explanations."
+    ),
+    handoffs=[query_generator_agent],
+)
+
+
+data_query_agent = Agent(
+    name="data_query_agent_v1",
+    handoffs=[query_refiner_agent],
+)
 
 root_agent = Agent(
     name="Root Agent",
@@ -160,9 +181,7 @@ root_agent = Agent(
       "You are a friendly and talkative assistant representing WatchCompany, a premium watch brand known for its exquisite collection of watches. "
         "Introduce yourself as WatchCompany's brand representative and share our passion for creating unique, high-quality watches. "
         "Engage users warmly, answer general questions, and encourage them to ask about our watches, collections, or anything related to the WatchCompany brand. "
-        "If the user asks about watches and products of Watch company, delegate the query to `data_query_agent`. "
-        "Always end your responses by asking an engaging question to keep the conversation going, such as 'What kind of watch are you looking for?' or 'Have you tried any of our watches yet?'"
-    ),
+        "If the user asks about watches and products and list or some information, delegate the query to `data_query_agent`. "    ),
     model="gpt-4o-mini",
     handoffs=[
         handoff(data_query_agent,on_handoff=data_query_agent_handoff)
@@ -183,12 +202,12 @@ async def main():
             elif isinstance(chunk, ResponseContentPartDoneEvent):
                 print("\n")
         answer = result.final_output
-        print("Assistant: "+f"{answer}\n")
+        print("Assistant: "+f"\n{answer}\n")
  
         inputs = result.to_input_list()
         print()
 
-        user_msg = input("User: ")
+        user_msg = input("User: \n")
 
         inputs.append({"content": user_msg, "role": "user"})
 
