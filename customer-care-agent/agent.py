@@ -1,8 +1,12 @@
 import random
-from agents import Agent, function_tool, Runner, RunContextWrapper, trace, handoff
+from agents import Agent, function_tool, Runner, RunContextWrapper, trace, handoff, RunConfig
 from pydantic import BaseModel, Field
 from openai import OpenAI
-from openai.types.responses import ResponseTextDeltaEvent, ResponseContentPartDoneEvent
+from openai.types.responses import (
+    ResponseCreatedEvent,
+    ResponseTextDeltaEvent,
+    ResponseContentPartDoneEvent
+)
 from dotenv import load_dotenv
 import asyncio, json, time
 import pandas as pd
@@ -94,6 +98,7 @@ def generate_watch_data(n):
 df = pd.DataFrame(generate_watch_data(10))
 # create a csv file with the dataframe
 print(df.head())
+df.to_csv('products-01.csv', index=False)
 
 class QueryGeneratorOutput(BaseModel):
     query: str = Field(description="A valid pandas expression that can be used to query the data.")
@@ -197,10 +202,16 @@ async def main():
             runner = Runner()
             result = runner.run_streamed(root_agent, input=inputs)
         async for chunk in result.stream_events():
-            if isinstance(chunk, ResponseTextDeltaEvent):
-                print(chunk.delta, end="", flush=True)
-            elif isinstance(chunk, ResponseContentPartDoneEvent):
-                print("\n")
+            if chunk.type == "raw_response_event":
+                event = chunk.data
+                if isinstance(event, ResponseCreatedEvent):
+                    agent_name = result.last_agent.name
+                    print(f"🏃 Starting `{agent_name}` \n")
+                    print("-" * 50, end="", flush=True)
+                if isinstance(chunk, ResponseTextDeltaEvent):
+                    print(chunk.delta, end="", flush=True)
+                elif isinstance(chunk, ResponseContentPartDoneEvent):
+                    print("\n")
         answer = result.final_output
         print("Assistant: "+f"\n{answer}\n")
  
